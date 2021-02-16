@@ -112,6 +112,7 @@ public class ConfigFileApplicationListener implements EnvironmentPostProcessor, 
 
 	/**
 	 * The "active profiles" property name.
+	 * 支持指定多个如dev,prod
 	 */
 	public static final String ACTIVE_PROFILES_PROPERTY = "spring.profiles.active";
 

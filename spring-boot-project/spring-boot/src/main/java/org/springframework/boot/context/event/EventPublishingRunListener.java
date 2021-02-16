@@ -53,10 +53,20 @@ public class EventPublishingRunListener implements SpringApplicationRunListener,
 	public EventPublishingRunListener(SpringApplication application, String[] args) {
 		this.application = application;
 		this.args = args;
-		this.initialMulticaster = new SimpleApplicationEventMulticaster();
-		for (ApplicationListener<?> listener : application.getListeners()) {
-			this.initialMulticaster.addApplicationListener(listener);
-		}
+        /**
+         * 将spring所有的applicationListener缓存到SimpleApplicationEventMulticaster中
+         * 目的如下：
+         * 便于将继承自{@link SpringApplicationEvent} 的子类事件，统一的全部发布出去
+         * {@link #starting()}
+         * {@link #environmentPrepared(ConfigurableEnvironment)}
+         * {@link #contextLoaded(ConfigurableApplicationContext)} 在这个方法中进行了context.addApplicationListener
+         * 后续的方法可以直接使用context.publishEvent来发布事件通知了，
+         * 如{@link #started(ConfigurableApplicationContext)} , {@link #running(ConfigurableApplicationContext)}
+         */
+        this.initialMulticaster = new SimpleApplicationEventMulticaster();
+        for (ApplicationListener<?> listener : application.getListeners()) {
+            this.initialMulticaster.addApplicationListener(listener);
+        }
 	}
 
 	@Override

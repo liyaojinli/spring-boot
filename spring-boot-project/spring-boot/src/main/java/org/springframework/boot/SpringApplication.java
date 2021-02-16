@@ -18,21 +18,13 @@ package org.springframework.boot;
 
 import java.lang.reflect.Constructor;
 import java.security.AccessControlException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Properties;
-import java.util.Set;
+import java.util.*;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.CachedIntrospectionResults;
 import org.springframework.beans.factory.groovy.GroovyBeanDefinitionReader;
@@ -40,14 +32,14 @@ import org.springframework.beans.factory.support.BeanDefinitionRegistry;
 import org.springframework.beans.factory.support.BeanNameGenerator;
 import org.springframework.beans.factory.xml.XmlBeanDefinitionReader;
 import org.springframework.boot.Banner.Mode;
+import org.springframework.boot.context.config.ConfigFileApplicationListener;
+import org.springframework.boot.context.event.ApplicationEnvironmentPreparedEvent;
 import org.springframework.boot.context.properties.bind.Bindable;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.context.properties.source.ConfigurationPropertySources;
+import org.springframework.boot.env.EnvironmentPostProcessor;
 import org.springframework.boot.web.reactive.context.StandardReactiveWebEnvironment;
-import org.springframework.context.ApplicationContext;
-import org.springframework.context.ApplicationContextInitializer;
-import org.springframework.context.ApplicationListener;
-import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.*;
 import org.springframework.context.annotation.AnnotatedBeanDefinitionReader;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.AnnotationConfigUtils;
@@ -55,6 +47,7 @@ import org.springframework.context.annotation.ClassPathBeanDefinitionScanner;
 import org.springframework.context.support.AbstractApplicationContext;
 import org.springframework.context.support.GenericApplicationContext;
 import org.springframework.core.GenericTypeResolver;
+import org.springframework.core.Ordered;
 import org.springframework.core.annotation.AnnotationAwareOrderComparator;
 import org.springframework.core.env.CommandLinePropertySource;
 import org.springframework.core.env.CompositePropertySource;
@@ -189,6 +182,10 @@ public class SpringApplication {
 
 	private static final Log logger = LogFactory.getLog(SpringApplication.class);
 
+	private static final Logger LOGGER = LoggerFactory.getLogger(SpringApplication.class);
+
+	private static final String LINE_SEPARATOR = System.lineSeparator();
+
 	private Set<Class<?>> primarySources;
 
 	private Set<String> sources = new LinkedHashSet<>();
@@ -257,9 +254,27 @@ public class SpringApplication {
 		Assert.notNull(primarySources, "PrimarySources must not be null");
 		this.primarySources = new LinkedHashSet<>(Arrays.asList(primarySources));
 		this.webApplicationType = WebApplicationType.deduceFromClasspath();
+        /**
+         * {@link ApplicationContextInitializer} 是spring组件spring-context组件中的一个接口，
+         * 主要是spring ioc容器刷新之前的一个回调接口，用于处于自定义逻辑
+         */
 		setInitializers((Collection) getSpringFactoriesInstances(ApplicationContextInitializer.class));
+        /**
+         * spring提供的事件监听机制
+         * {@link ApplicationListener}
+         * {@link ApplicationEvent}
+         */
 		setListeners((Collection) getSpringFactoriesInstances(ApplicationListener.class));
 		this.mainApplicationClass = deduceMainApplicationClass();
+        LOGGER.info("webApplicationType->{}" + LINE_SEPARATOR +
+                                "ApplicationContextInitializer->{}" + LINE_SEPARATOR +
+                                "ApplicationListener->{}" + LINE_SEPARATOR +
+                                "mainApplicationClass->{}",
+                        this.webApplicationType,
+                        this.getInitializers(),
+                        this.getListeners(),
+                        this.mainApplicationClass
+                );
 	}
 
 	private Class<?> deduceMainApplicationClass() {
@@ -288,7 +303,14 @@ public class SpringApplication {
 		stopWatch.start();
 		ConfigurableApplicationContext context = null;
 		Collection<SpringBootExceptionReporter> exceptionReporters = new ArrayList<>();
+        // java.awt.headless=true表示是服务器程序，没有显示器，鼠标等外设，那么不能使用这些外设，比如生成一张图片就需要使用cpu计算得出
 		configureHeadlessProperty();
+        /**
+         * springBoot提供的事件监听
+         * {@link SpringApplicationRunListener}
+         * {@link org.springframework.boot.context.event.EventPublishingRunListener} 这个类会发布事件
+         * {@link org.springframework.boot.context.event.SpringApplicationEvent} 发布的事件类型就是这个类的子类
+         */
 		SpringApplicationRunListeners listeners = getRunListeners(args);
 		listeners.starting();
 		try {
@@ -328,7 +350,13 @@ public class SpringApplication {
 			ApplicationArguments applicationArguments) {
 		// Create and configure the environment
 		ConfigurableEnvironment environment = getOrCreateEnvironment();
+		// 将java -jar启动命令中的参数加入到环境中
 		configureEnvironment(environment, applicationArguments.getSourceArgs());
+		// 发布环境准备完成事件
+        /**
+         * {@link ConfigFileApplicationListener} 这个类中监听了 {@link ApplicationEnvironmentPreparedEvent}事件
+         * {@link ConfigFileApplicationListener} 同时也是 {@link EnvironmentPostProcessor} 的实现类，也会进行环境配置的加载,{@link ConfigFileApplicationListener#postProcessEnvironment(ConfigurableEnvironment, SpringApplication)}
+         */
 		listeners.environmentPrepared(environment);
 		bindToSpringApplication(environment);
 		if (!this.isCustomEnvironment) {
@@ -336,6 +364,15 @@ public class SpringApplication {
 					deduceEnvironmentClass());
 		}
 		ConfigurationPropertySources.attach(environment);
+        // print all env props
+        Iterator<PropertySource<?>> iterator = environment.getPropertySources().iterator();
+        System.out.println("ConfigurableEnvironment has props below");
+        while (iterator.hasNext()) {
+            PropertySource<?> propertySource = iterator.next();
+            System.out.println("name->"+ propertySource.getName()
+                    +",source->"+propertySource.getSource()
+            );
+        }
 		return environment;
 	}
 
@@ -404,8 +441,26 @@ public class SpringApplication {
 	private <T> Collection<T> getSpringFactoriesInstances(Class<T> type, Class<?>[] parameterTypes, Object... args) {
 		ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
 		// Use names and ensure unique to protect against duplicates
+		// 从src/main/resources/META-INF/spring.factories文件中获取type对应的配置类
+		/**
+		 * 一个典型的spring.factories文件如下
+		 * org.springframework.context.ApplicationListener=\
+		 * org.liyaojin.springboot.listeners.SpringApplicationStartedListener
+		 *
+		 * 其中<strong>org.springframework.context.ApplicationListener</strong>就是对应的type
+		 */
 		Set<String> names = new LinkedHashSet<>(SpringFactoriesLoader.loadFactoryNames(type, classLoader));
+		/**
+		 * 1. 根据spring.factories配置的name+classloader+parameterTypes找到对应的构造函数
+		 * 2. 传入args反射创建对应的实例对象
+ 		 */
 		List<T> instances = createSpringFactoriesInstances(type, parameterTypes, classLoader, args, names);
+		/**
+		 * 根据order排序
+		 * 对应的instance可以是
+		 * 1. {@link Ordered} 的实现类
+		 * 2. 在类上声明{@link org.springframework.core.annotation.Order} 注解
+		 */
 		AnnotationAwareOrderComparator.sort(instances);
 		return instances;
 	}
@@ -435,7 +490,7 @@ public class SpringApplication {
 		}
 		switch (this.webApplicationType) {
 		case SERVLET:
-			return new StandardServletEnvironment();
+            return new StandardServletEnvironment();
 		case REACTIVE:
 			return new StandardReactiveWebEnvironment();
 		default:
